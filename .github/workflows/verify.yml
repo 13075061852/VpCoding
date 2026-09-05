@@ -1,0 +1,21 @@
+name: Verify package
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject private runtime artifacts
+        run: |
+          ! git ls-files | grep -E '(^|/)(admin\.json|state\.json|config\.json|[^/]+\.(pem|key|crt)|relay-admin-credentials\.txt)$'
+          ! grep -RInE 'BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|password_hash.{0,80}[A-Za-z0-9_-]{20,}' -- . --exclude-dir=.git
+      - name: Shell syntax
+        run: bash -n install.sh update.sh
+      - name: Python syntax
+        run: python3 -m py_compile relay_admin/app.py relay_admin/operations.py
+      - name: Ensure the package has all runtime assets
+        run: test -f relay_admin/{app.py,operations.py,console.css,console.js,delete-dialog.js}

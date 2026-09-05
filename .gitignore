@@ -1,0 +1,16 @@
+# Runtime and secret material — never commit these.
+__pycache__/
+*.py[cod]
+.env
+.env.*
+*.pem
+*.key
+*.crt
+admin.json
+state.json
+config.json
+relay-admin-credentials.txt
+*.tar.gz
+*.zip
+node_modules/
+.DS_Store

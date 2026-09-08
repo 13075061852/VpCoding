@@ -1,21 +1,44 @@
 #!/usr/bin/env bash
 # Relay Control bootstrap installer. It creates a NEW instance only.
+#
+# Permission model (important):
+#   /etc/xray-att-relay is owned by root and group xray-att-relay, mode 2750
+#   (setgid). The service runs as xray-att-relay, so it must be able to
+#   traverse the directory and read config.json. The setgid bit makes files the
+#   panel later rewrites keep the xray-att-relay group.
 set -Eeuo pipefail
 IFS=$'\n\t'
 
-VERSION="1.0.0"
-XRAY_VERSION="26.3.27"
+RELAY_VERSION="1.1.0"
+XRAY_VERSION="${XRAY_VERSION:-26.3.27}"
 RELAY_REPO="${RELAY_REPO:-}"
 PUBLIC_HOST="${PUBLIC_HOST:-}"
 ADMIN_USER="${ADMIN_USER:-admin}"
+REALITY_DEST="${REALITY_DEST:-}"
 NON_INTERACTIVE=0
+ENTRY_PORT=8443
+PANEL_PORT=8444
+
+# REALITY destinations are probed with a real handshake before one is written
+# into the config, so an unreachable or version-incompatible target can never
+# end up deployed. Some targets (for example www.microsoft.com) have been
+# reported to break REALITY handshakes in recent Xray releases, and Xray itself
+# warns that apple/icloud targets risk GFW blocking, so those go last.
+REALITY_DEST_CANDIDATES=(
+  "www.bing.com:443"
+  "www.cloudflare.com:443"
+  "www.amazon.com:443"
+  "www.apple.com:443"
+)
 
 usage() {
   cat <<'EOF'
 Usage:
-  sudo bash install.sh [--host PUBLIC_IP_OR_DOMAIN] [--repo GIT_URL] [--non-interactive]
+  sudo bash install.sh [--host PUBLIC_IP_OR_DOMAIN] [--repo GIT_URL]
+                       [--dest HOST:PORT] [--admin-user NAME]
+                       [--xray-version VERSION] [--non-interactive]
 
-Environment alternatives: PUBLIC_HOST, RELAY_REPO, ADMIN_USER.
+Environment alternatives: PUBLIC_HOST, RELAY_REPO, ADMIN_USER, REALITY_DEST.
 This installer refuses to overwrite an existing Relay/Xray installation.
 EOF
 }
@@ -23,6 +46,7 @@ while (($#)); do
   case "$1" in
     --host) PUBLIC_HOST="${2:?--host requires a value}"; shift 2 ;;
     --repo) RELAY_REPO="${2:?--repo requires a value}"; shift 2 ;;
+    --dest) REALITY_DEST="${2:?--dest requires a value}"; shift 2 ;;
     --admin-user) ADMIN_USER="${2:?--admin-user requires a value}"; shift 2 ;;
     --xray-version) XRAY_VERSION="${2:?--xray-version requires a value}"; shift 2 ;;
     --non-interactive) NON_INTERACTIVE=1; shift ;;
@@ -34,6 +58,9 @@ done
 [[ ${EUID} -eq 0 ]] || { echo 'Run as root (sudo bash install.sh).' >&2; exit 1; }
 [[ "$ADMIN_USER" =~ ^[A-Za-z0-9_.-]{1,80}$ ]] || { echo 'Invalid admin user.' >&2; exit 1; }
 [[ "$XRAY_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid Xray version.' >&2; exit 1; }
+if [[ -n "$REALITY_DEST" ]]; then
+  [[ "$REALITY_DEST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*:[0-9]{1,5}$ ]] || { echo 'Provide --dest as host:port (for example www.apple.com:443).' >&2; exit 1; }
+fi
 
 if [[ -z "$PUBLIC_HOST" ]]; then
   PUBLIC_HOST="$(curl -4fsS --connect-timeout 5 --max-time 10 https://api.ipify.org || true)"
@@ -46,8 +73,9 @@ if [[ -e /etc/node-admin/admin.json || -e /etc/xray-att-relay/config.json || -e 
   exit 1
 fi
 
-if [[ -r /etc/os-release ]]; then . /etc/os-release; else ID=''; fi
-case "${ID:-}" in debian|ubuntu) ;; *) echo 'Only Debian/Ubuntu are supported by this bootstrap script.' >&2; exit 1;; esac
+# Read os-release in a subshell so it cannot clobber this script's variables.
+OS_ID="$(. /etc/os-release 2>/dev/null && printf '%s' "${ID:-}")"
+case "$OS_ID" in debian|ubuntu) ;; *) echo 'Only Debian/Ubuntu are supported by this bootstrap script.' >&2; exit 1;; esac
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
@@ -56,7 +84,12 @@ apt-get install -y --no-install-recommends ca-certificates curl unzip openssl gi
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_DIR="$SCRIPT_DIR"
 TMP_REPO=''
-cleanup() { [[ -n "$TMP_REPO" ]] && rm -rf "$TMP_REPO"; }
+# The EXIT trap must end with a command that succeeds, otherwise it would
+# overwrite the installer's real exit status with a failure.
+cleanup() {
+  if [[ -n "$TMP_REPO" ]]; then rm -rf "$TMP_REPO"; fi
+  return 0
+}
 trap cleanup EXIT
 if [[ ! -f "$SOURCE_DIR/relay_admin/app.py" ]]; then
   [[ -n "$RELAY_REPO" ]] || { echo 'Installer was piped; provide --repo https://github.com/OWNER/REPO.git.' >&2; exit 1; }
@@ -68,6 +101,7 @@ fi
 for file in app.py operations.py console.css console.js delete-dialog.js; do
   [[ -f "$SOURCE_DIR/relay_admin/$file" ]] || { echo "Package is missing relay_admin/$file" >&2; exit 1; }
 done
+[[ -f "$SOURCE_DIR/selftest.sh" ]] || { echo 'Package is missing selftest.sh' >&2; exit 1; }
 
 ARCH="$(dpkg --print-architecture)"
 [[ "$ARCH" == amd64 ]] || { echo "Unsupported architecture: $ARCH (amd64 required)." >&2; exit 1; }
@@ -82,11 +116,31 @@ unzip -q "$work/xray.zip" -d "$work/xray"
 install -m 0755 "$work/xray/xray" /usr/local/bin/xray
 
 install -d -m 0750 /opt/node-admin
-install -d -m 0700 /etc/node-admin /etc/xray-att-relay /var/backups/node-admin /var/log/node-admin
+install -d -m 0700 /etc/node-admin /var/backups/node-admin /var/log/node-admin
 install -d -m 0700 /etc/fastclient-subscription /etc/att-subscription
 if ! id -u xray-att-relay >/dev/null 2>&1; then
   useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin xray-att-relay
 fi
+# The Xray service runs as xray-att-relay: make the config directory traversable
+# and the config group-readable, with setgid so panel rewrites keep the group.
+install -d -m 0750 /etc/xray-att-relay
+chown root:xray-att-relay /etc/xray-att-relay
+chmod 2750 /etc/xray-att-relay
+
+# Select a REALITY destination that actually completes a handshake.
+if [[ -z "$REALITY_DEST" ]]; then
+  echo 'Probing REALITY destinations...'
+  for candidate in "${REALITY_DEST_CANDIDATES[@]}"; do
+    if bash "$SOURCE_DIR/selftest.sh" --probe-dest "$candidate" >/dev/null 2>&1; then
+      REALITY_DEST="$candidate"
+      echo "  selected: $REALITY_DEST"
+      break
+    fi
+    echo "  unavailable: $candidate" >&2
+  done
+fi
+[[ -n "$REALITY_DEST" ]] || { echo 'No working REALITY destination found; pass --dest host:port.' >&2; exit 1; }
+REALITY_SERVER_NAME="${REALITY_DEST%:*}"
 
 keypair="$(/usr/local/bin/xray x25519)"
 private_key="$(awk -F': ' '/PrivateKey|Private key/{print $2; exit}' <<<"$keypair")"
@@ -96,12 +150,12 @@ cat > /etc/xray-att-relay/config.json <<EOF
 {
   "log": {"loglevel": "warning"},
   "inbounds": [{
-    "tag": "new-att-relay-in", "listen": "0.0.0.0", "port": 8443,
+    "tag": "new-att-relay-in", "listen": "0.0.0.0", "port": ${ENTRY_PORT},
     "protocol": "vless",
     "settings": {"clients": [], "decryption": "none"},
     "streamSettings": {"network": "tcp", "security": "reality", "realitySettings": {
-      "show": false, "dest": "www.microsoft.com:443", "xver": 0,
-      "serverNames": ["www.microsoft.com"], "privateKey": "${private_key}", "shortIds": ["${short_id}"]
+      "show": false, "dest": "${REALITY_DEST}", "xver": 0,
+      "serverNames": ["${REALITY_SERVER_NAME}"], "privateKey": "${private_key}", "shortIds": ["${short_id}"]
     }}
   }],
   "outbounds": [
@@ -111,7 +165,8 @@ cat > /etc/xray-att-relay/config.json <<EOF
   "routing": {"domainStrategy": "AsIs", "rules": []}
 }
 EOF
-chmod 0644 /etc/xray-att-relay/config.json
+chown root:xray-att-relay /etc/xray-att-relay/config.json
+chmod 0640 /etc/xray-att-relay/config.json
 /usr/local/bin/xray run -test -config /etc/xray-att-relay/config.json
 
 if [[ "$PUBLIC_HOST" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; then san="IP:${PUBLIC_HOST}"; else san="DNS:${PUBLIC_HOST}"; fi
@@ -190,29 +245,51 @@ ReadWritePaths=/etc/node-admin /etc/xray-att-relay /var/backups/node-admin /var/
 WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
-systemctl enable --now xray-att-relay node-admin
-for _ in {1..15}; do
-  if curl -fsk --max-time 3 "https://127.0.0.1:8444/healthz" | grep -qx 'ok'; then break; fi
+systemctl enable --now xray-att-relay
+systemctl enable --now node-admin
+
+# Both services must be healthy before the installer reports success.
+if ! systemctl is-active --quiet xray-att-relay; then
+  journalctl -u xray-att-relay -n 50 --no-pager >&2 || true
+  echo 'xray-att-relay failed to start.' >&2
+  exit 1
+fi
+if ! (exec 3<>"/dev/tcp/127.0.0.1/${ENTRY_PORT}") 2>/dev/null; then
+  journalctl -u xray-att-relay -n 50 --no-pager >&2 || true
+  echo "xray-att-relay is active but TCP ${ENTRY_PORT} is not listening." >&2
+  exit 1
+fi
+for _ in {1..30}; do
+  if curl -fsk --max-time 3 "https://127.0.0.1:${PANEL_PORT}/healthz" 2>/dev/null | grep -qx 'ok'; then break; fi
   sleep 1
 done
-curl -fsk --max-time 5 "https://127.0.0.1:8444/healthz" | grep -qx 'ok' || { journalctl -u node-admin -n 50 --no-pager >&2; exit 1; }
+curl -fsk --max-time 5 "https://127.0.0.1:${PANEL_PORT}/healthz" | grep -qx 'ok' || { journalctl -u node-admin -n 50 --no-pager >&2 || true; echo 'node-admin health check failed.' >&2; exit 1; }
+systemctl is-active --quiet node-admin || { echo 'node-admin is not active.' >&2; exit 1; }
+
+# Real end-to-end proof: inject a temporary client, complete a REALITY
+# handshake through the live service, then restore the zero-state config.
+echo 'Running end-to-end self-test...'
+bash "$SOURCE_DIR/selftest.sh"
 
 cat > /root/relay-admin-credentials.txt <<EOF
 Relay Control initial credentials — store offline, then delete this file.
-URL: https://${PUBLIC_HOST}:8444
+URL: https://${PUBLIC_HOST}:${PANEL_PORT}
 Username: ${admin_user}
 Password: ${admin_password}
-Xray entry port: 8443
-Installed version: ${VERSION}
+Xray entry port: ${ENTRY_PORT}
+REALITY destination: ${REALITY_DEST}
+Installed version: ${RELAY_VERSION}
 EOF
 chmod 0600 /root/relay-admin-credentials.txt
 cat <<EOF
 
-Installed successfully.
-Management URL: https://${PUBLIC_HOST}:8444
+Installed and verified successfully.
+Management URL: https://${PUBLIC_HOST}:${PANEL_PORT}
 Username: ${admin_user}
 Password: ${admin_password}
+Xray entry port: ${ENTRY_PORT}
+REALITY destination: ${REALITY_DEST}
 
 Credentials are also in /root/relay-admin-credentials.txt (mode 0600).
-Open TCP 8443 and 8444 in your cloud firewall/security group. Change the admin password after first login.
+Open TCP ${ENTRY_PORT} and ${PANEL_PORT} in your cloud firewall/security group. Change the admin password after first login.
 EOF

@@ -22,4 +22,7 @@ if ! systemctl restart node-admin || ! curl -fsk --max-time 10 https://127.0.0.1
   echo "Update failed and was rolled back: $backup" >&2
   exit 1
 fi
+if [[ -f "$SOURCE_DIR/selftest.sh" ]]; then
+  bash "$SOURCE_DIR/selftest.sh" --quick
+fi
 echo "Updated Relay Control. Backup: $backup"

@@ -16,7 +16,17 @@ for file in app.py operations.py console.css console.js delete-dialog.js; do
   install -m 0640 "$SOURCE_DIR/relay_admin/$file" "/opt/node-admin/$file.new"
   mv "/opt/node-admin/$file.new" "/opt/node-admin/$file"
 done
-if ! systemctl restart node-admin || ! curl -fsk --max-time 10 https://127.0.0.1:8444/healthz | grep -qx ok; then
+systemctl restart node-admin
+healthy=0
+for _ in {1..30}; do
+  if curl -fsk --max-time 3 https://127.0.0.1:8444/healthz 2>/dev/null | grep -qx ok; then
+    healthy=1
+    break
+  fi
+  systemctl is-active --quiet node-admin || break
+  sleep 1
+done
+if [[ "$healthy" -ne 1 ]]; then
   cp "$backup"/* /opt/node-admin/
   systemctl restart node-admin
   echo "Update failed and was rolled back: $backup" >&2

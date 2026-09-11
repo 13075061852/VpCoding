@@ -30,11 +30,11 @@ The installer will:
 1. Install Python, QR support, Xray and required system packages.
 2. Verify the Xray GitHub-release SHA-256 digest before installing it.
 3. **Probe REALITY destinations with a real handshake** and deploy the first one that works, so a target that is unreachable or incompatible with the installed Xray release can never be written into the config.
-4. Generate a fresh Reality keypair, initial Xray configuration and self-signed panel certificate.
+4. Generate a fresh Reality keypair, initial Xray configuration and self-signed panel certificate. The Xray config enables the **StatsService API** (`127.0.0.1:10085`), the `stats` counter store and per-user uplink/downlink accounting in policy level 0, so forwarding nodes report real traffic from the first byte.
 5. Create the config directory with the correct ownership (`root:xray-att-relay`, mode `2750`) so the unprivileged Xray service can actually read `config.json`, and keep it readable after the panel rewrites it.
 6. Generate a random administrator password and save it in `/root/relay-admin-credentials.txt` (`0600`).
 7. Enable and start `xray-att-relay.service` and `node-admin.service`, then require **both** to be active, with TCP `8443` and `8444` actually listening and the panel health endpoint returning `ok`.
-8. Run `selftest.sh`: inject a temporary client, complete a **real REALITY handshake** against the live service, fetch a URL through the tunnel, and restore the zero-state config. The installer only reports success after this passes.
+8. Run `selftest.sh`: inject a temporary client, complete a **real REALITY handshake** against the live service, fetch a URL through the tunnel, confirm the **StatsService API reports that user's traffic**, and restore the zero-state config. The installer only reports success after this passes.
 
 ### Choosing the REALITY destination
 
@@ -68,11 +68,28 @@ Relay Control self-test
   [ok]   TCP 8444 listening
   [ok]   panel health endpoint https://127.0.0.1:8444/healthz
   [ok]   REALITY handshake and proxied request through TCP 8443 (SNI www.apple.com)
+  [ok]   StatsService reports per-user traffic for __selftest__
   [ok]   zero-state config restored and entry port listening
 Self-test passed.
 ```
 
 The full check temporarily adds a client named `__selftest__` to the live config, restarts Xray, tests, then restores the previous config — even if the test fails. It never leaves the temporary client behind.
+
+## Traffic accounting
+
+Each forwarding node is an Xray user. The panel polls the Xray **StatsService** every 60 seconds and adds the `uplink`/`downlink` deltas to the node's persisted usage, so quotas and expiry enforcement work even though Xray counters are in-memory and reset on restart. VLESS/Reality and FastClient forwards are keyed by their client email, while SOCKS5 forwards are keyed by their account username (Xray reports SOCKS accounts that way).
+
+This only works when the Xray config contains all three of:
+
+```json
+"api":    { "tag": "api", "listen": "127.0.0.1:10085", "services": ["StatsService"] },
+"stats":  {},
+"policy": { "levels": { "0": { "statsUserUplink": true, "statsUserDownlink": true } } }
+```
+
+If any part is missing, Xray never records per-user traffic and every node shows `0B` forever. Fresh installs get this automatically. For an existing instance whose config predates this, the panel **self-repairs the config on startup** (and checks again every 5 minutes): it adds the missing keys, runs `xray run -test`, restarts Xray once and rolls back if Xray rejects the file. The host-status page shows the result as `计费正常` / `计费未启用` / `计费不可达`.
+
+> The one-time repair restarts Xray, which resets the in-memory counters. Persisted usage is preserved because the panel accumulates deltas.
 
 ## Updating an existing installation
 
@@ -84,11 +101,11 @@ git pull --ff-only
 sudo bash update.sh
 ```
 
-`update.sh` creates a local application backup, rolls back automatically if the panel health check fails, and runs `selftest.sh --quick`. It does **not** restart Xray.
+`update.sh` creates a local application backup, rolls back automatically if the panel health check fails, and runs `selftest.sh --quick`. `update.sh` itself never writes Xray configuration. Note that the upgraded panel may repair the Xray config once on its first start (see [Traffic accounting](#traffic-accounting)), which restarts Xray a single time.
 
 ## What the zero-state configuration contains
 
-The installed Xray configuration has a VLESS Reality inbound, `direct` and `block` outbounds, and **no clients, upstream nodes, subscriptions, or forwarding rules**. Use the panel to add upstream nodes and create forwarding credentials. Do not paste production `/etc/node-admin` or `/etc/xray-att-relay` into this repository.
+The installed Xray configuration has a VLESS Reality inbound, `direct` and `block` outbounds, the StatsService API and **no clients, upstream nodes, subscriptions, or forwarding rules**. Use the panel to add upstream nodes and create forwarding credentials. Do not paste production `/etc/node-admin` or `/etc/xray-att-relay` into this repository.
 
 ## Security notes
 

@@ -37,6 +37,8 @@ PUBLIC_HOST = os.environ.get('PUBLIC_HOST', '').strip()
 RELAY_LABEL = os.environ.get('RELAY_LABEL', '中转控制台').strip() or '中转控制台'
 PORT = 8444
 XRAY = '/usr/local/bin/xray'
+STATS_API_ADDR = '127.0.0.1:10085'
+STATS_REPAIR_INTERVAL = 300
 SOCKS_PORT_START = 20000
 SOCKS_PORT_END = 20999
 FASTCLIENT_REVOKED_PATHS_FILE = '/etc/fastclient-subscription/revoked-paths.json'
@@ -1103,6 +1105,12 @@ APP_JS = r'''(() => {
           active.replaceChildren(dot, document.createTextNode(isActive ? '运行中' : (service.active || '未知')));
         }
         if (enabled) enabled.textContent = service.enabled === 'enabled' ? '开机启用' : (service.enabled || '未知');
+        const stats = row.querySelector('[data-service-stats]');
+        if (stats) {
+          const [statsClass, statsText] = ({ok: ['ok', '计费正常'], missing: ['warn', '计费未启用'], unreachable: ['bad', '计费不可达']})[service.stats] || ['neutral', '计费未知'];
+          stats.className = `status-badge ${statsClass}`;
+          stats.textContent = statsText;
+        }
       });
       const checked = document.querySelector('[data-host-field="checked_label"]');
       if (checked) {
@@ -2482,7 +2490,8 @@ def host_snapshot():
         if unit.returncode:
             continue
         active, enabled = service_state(cfg['service'])
-        services[key] = {'service': cfg['service'], 'entry': cfg['entry'], 'active': active, 'enabled': enabled}
+        services[key] = {'service': cfg['service'], 'entry': cfg['entry'], 'active': active, 'enabled': enabled,
+                         'stats': stats_service_status(key)}
     return {'hostname': socket.gethostname(), 'uptime_seconds': uptime_seconds, 'uptime_text': uptime_text,
             'load1': load1, 'disk_used_percent': disk_used, 'disk_text': disk_text, 'memory_text': memory_text,
             'public_ip': public_ip, 'os_name': os_name, 'cpu_text': cpu_text, 'kernel': platform.release(),
@@ -2666,7 +2675,9 @@ def dashboard(csrf, flash='', error='', active_view='nodes-view'):
         active_class = 'ok' if active else 'bad'
         active_text = '运行中' if active else item['active']
         enabled_text = '开机启用' if item['enabled'] == 'enabled' else item['enabled']
-        return '<div class="service-row" data-service="%s"><div class="service-main"><span class="service-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 9h8M8 13h8M8 17h4"/></svg></span><div><b>%s</b></div></div><div class="service-meta"><span class="status-badge %s" data-service-active><span class="online-dot"></span>%s</span><span class="status-badge neutral" data-service-enabled>%s</span><form method="post" action="/service/restart"><input type="hidden" name="csrf" value="%s"><input type="hidden" name="config" value="%s"><button class="secondary" type="submit">重启</button></form></div></div>' % (esc(key), esc('Xray ' + key), active_class, esc(active_text), esc(enabled_text), esc_csrf, esc(key))
+        stats = item.get('stats', 'unknown')
+        stats_class, stats_text = {'ok': ('ok', '计费正常'), 'missing': ('warn', '计费未启用'), 'unreachable': ('bad', '计费不可达')}.get(stats, ('neutral', '计费未知'))
+        return '<div class="service-row" data-service="%s"><div class="service-main"><span class="service-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 9h8M8 13h8M8 17h4"/></svg></span><div><b>%s</b></div></div><div class="service-meta"><span class="status-badge %s" data-service-active><span class="online-dot"></span>%s</span><span class="status-badge neutral" data-service-enabled>%s</span><span class="status-badge %s" data-service-stats title="按用户统计的上传/下载流量">%s</span><form method="post" action="/service/restart"><input type="hidden" name="csrf" value="%s"><input type="hidden" name="config" value="%s"><button class="secondary" type="submit">重启</button></form></div></div>' % (esc(key), esc('Xray ' + key), active_class, esc(active_text), esc(enabled_text), stats_class, esc(stats_text), esc_csrf, esc(key))
 
     disk_text = '%s%%' % host['disk_used_percent'] if host['disk_used_percent'] is not None else '—'
     service_rows = ''.join(service_row(key, item) for key, item in host['services'].items())
@@ -2718,14 +2729,145 @@ def dashboard(csrf, flash='', error='', active_view='nodes-view'):
     return page(''.join(parts))
 
 
-def xray_stats_query(pattern='user>>>'):
+def stats_port_in_use(data, addr=STATS_API_ADDR):
+    """True when an inbound already listens on the StatsService address' port."""
     try:
-        result = subprocess.run([XRAY, 'api', 'statsquery', '--server=127.0.0.1:10085', '-pattern', pattern],
+        port = int(str(addr).rsplit(':', 1)[1])
+    except (IndexError, ValueError):
+        return False
+    for inbound in data.get('inbounds', []):
+        if not isinstance(inbound, dict):
+            continue
+        try:
+            if int(inbound.get('port') or 0) == port:
+                return True
+        except (TypeError, ValueError):
+            continue
+        listen = inbound.get('listen')
+        if isinstance(listen, str) and listen.endswith(':' + str(port)):
+            return True
+    return False
+
+
+def stats_service_config_needed(data):
+    """Return True when the Xray config cannot track per-user traffic."""
+    api = data.get('api')
+    if not isinstance(api, dict):
+        return True
+    services = api.get('services')
+    if not isinstance(services, list) or 'StatsService' not in services:
+        return True
+    if not (isinstance(api.get('listen'), str) and api.get('listen')) and not stats_port_in_use(data):
+        return True
+    if 'stats' not in data:
+        return True
+    policy = data.get('policy')
+    levels = policy.get('levels') if isinstance(policy, dict) else None
+    level = levels.get('0') if isinstance(levels, dict) else None
+    if not isinstance(level, dict):
+        return True
+    return not (level.get('statsUserUplink') and level.get('statsUserDownlink'))
+
+
+def enable_stats_service(data):
+    """Add the StatsService API, stats store and per-user policy in place."""
+    api = data.get('api')
+    if not isinstance(api, dict):
+        api = {}
+        data['api'] = api
+    api.setdefault('tag', 'api')
+    services = api.get('services')
+    if not isinstance(services, list):
+        services = []
+        api['services'] = services
+    if 'StatsService' not in services:
+        services.append('StatsService')
+    if not (isinstance(api.get('listen'), str) and api.get('listen')) and not stats_port_in_use(data):
+        api['listen'] = STATS_API_ADDR
+    data.setdefault('stats', {})
+    policy = data.get('policy')
+    if not isinstance(policy, dict):
+        policy = {}
+        data['policy'] = policy
+    levels = policy.get('levels')
+    if not isinstance(levels, dict):
+        levels = {}
+        policy['levels'] = levels
+    level = levels.get('0')
+    if not isinstance(level, dict):
+        level = {}
+        levels['0'] = level
+    level['statsUserUplink'] = True
+    level['statsUserDownlink'] = True
+
+
+_stats_repair_lock = threading.Lock()
+_stats_repair_at = 0.0
+_stats_status_cache = {'at': 0.0, 'key': '', 'value': 'unknown'}
+
+
+def ensure_stats_service(config_key='att', force=False):
+    """Enable per-user traffic accounting when an install is missing it.
+
+    Older Relay Control instances were installed without the StatsService API,
+    so every forwarding node permanently reported 0 B of traffic. Repair the
+    config once; write_config_json validates, restarts and rolls back on error.
+    """
+    global _stats_repair_at
+    cfg = CONFIGS.get(config_key)
+    if not cfg:
+        return False
+    now = time.time()
+    with _stats_repair_lock:
+        if not force and now - _stats_repair_at < STATS_REPAIR_INTERVAL:
+            return False
+        _stats_repair_at = now
+        try:
+            data = read_config(cfg)
+        except Exception as exc:
+            print('stats service check failed: %s' % exc, flush=True)
+            return False
+        if not stats_service_config_needed(data):
+            return False
+        enable_stats_service(data)
+        try:
+            write_config_json(cfg, data)
+        except Exception as exc:
+            print('stats service repair failed: %s' % exc, flush=True)
+            return False
+        print('stats service enabled in %s' % cfg['path'], flush=True)
+    return True
+
+
+def stats_service_status(config_key='att'):
+    """Return 'ok', 'missing' or 'unreachable' for per-user traffic accounting."""
+    cfg = CONFIGS.get(config_key)
+    if not cfg:
+        return 'unknown'
+    now = time.time()
+    cached = _stats_status_cache
+    if cached['key'] == config_key and now - cached['at'] < 30:
+        return cached['value']
+    try:
+        if stats_service_config_needed(read_config(cfg)):
+            value = 'missing'
+        else:
+            value = 'ok' if xray_stats_query('user>>>') is not None else 'unreachable'
+    except Exception:
+        value = 'unknown'
+    cached.update({'at': now, 'key': config_key, 'value': value})
+    return value
+
+
+def xray_stats_query(pattern='user>>>'):
+    """Return per-user Xray counters, or None when StatsService is unreachable."""
+    try:
+        result = subprocess.run([XRAY, 'api', 'statsquery', '--server=' + STATS_API_ADDR, '-pattern', pattern],
                                 capture_output=True, text=True, timeout=10)
     except Exception:
-        return {}
+        return None
     if result.returncode:
-        return {}
+        return None
     stats = {}
     # Accept both protobuf text like "name: \"...\" value: 123" and JSON-ish output.
     for name, value in re.findall(r'name:\s*"([^"]+)"\s*value:\s*([0-9]+)', result.stdout):
@@ -2733,6 +2875,21 @@ def xray_stats_query(pattern='user>>>'):
     for name, value in re.findall(r'"name"\s*:\s*"([^"]+)"[^{}]*"value"\s*:\s*([0-9]+)', result.stdout):
         stats[name] = int(value)
     return stats
+
+
+def forward_stats_keys(item):
+    """Return the Xray StatsService keys that carry a forward's traffic.
+
+    VLESS/Reality and FastClient clients report under their email, while a
+    SOCKS5 inbound reports under its account username.
+    """
+    if item.get('mode') == 'socks':
+        user = item.get('access_user')
+        return [user] if isinstance(user, str) and user else []
+    emails = item.get('emails')
+    if not isinstance(emails, list):
+        emails = [item.get('email')] if item.get('email') else []
+    return [value for value in emails if isinstance(value, str) and value]
 
 
 def update_traffic_stats():
@@ -2748,14 +2905,11 @@ def update_traffic_stats():
     with MUTEX:
         state = load_state()
         for item in state.get('forward_meta', {}).values():
-            emails = item.get('emails')
-            if not isinstance(emails, list):
-                emails = [item.get('email')] if item.get('email') else []
             raw_upload = 0
             raw_download = 0
-            for email in emails:
-                raw_upload += int(stats.get('user>>>%s>>>traffic>>>uplink' % email, 0))
-                raw_download += int(stats.get('user>>>%s>>>traffic>>>downlink' % email, 0))
+            for key in forward_stats_keys(item):
+                raw_upload += int(stats.get('user>>>%s>>>traffic>>>uplink' % key, 0))
+                raw_download += int(stats.get('user>>>%s>>>traffic>>>downlink' % key, 0))
             last_upload = int(item.get('traffic_last_raw_upload') or 0)
             last_download = int(item.get('traffic_last_raw_download') or 0)
             delta_upload = raw_upload - last_upload if raw_upload >= last_upload else raw_upload
@@ -3401,6 +3555,7 @@ def enforce_expired_forwards():
 def expiration_worker():
     while True:
         try:
+            ensure_stats_service()
             update_traffic_stats()
             enforce_expired_forwards()
         except Exception as exc:
@@ -4288,6 +4443,7 @@ def main():
     context.load_cert_chain(CERT_FILE, KEY_FILE)
     server = BoundedThreadingHTTPServer(('0.0.0.0', PORT), Handler)
     server.ssl_context = context
+    ensure_stats_service(force=True)
     update_traffic_stats()
     enforce_expired_forwards()
     threading.Thread(target=expiration_worker, daemon=True).start()

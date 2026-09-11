@@ -6,6 +6,12 @@
 #   (setgid). The service runs as xray-att-relay, so it must be able to
 #   traverse the directory and read config.json. The setgid bit makes files the
 #   panel later rewrites keep the xray-att-relay group.
+#
+# Traffic accounting:
+#   The generated config enables the Xray StatsService API on 127.0.0.1:10085,
+#   the "stats" counter store and per-user uplink/downlink accounting in policy
+#   level 0. Without these the panel can create forwarding nodes but can never
+#   read their traffic, so every node would permanently report 0 B.
 set -Eeuo pipefail
 IFS=$'\n\t'
 
@@ -149,6 +155,9 @@ short_id="$(openssl rand -hex 8)"
 cat > /etc/xray-att-relay/config.json <<EOF
 {
   "log": {"loglevel": "warning"},
+  "api": {"tag": "api", "listen": "127.0.0.1:10085", "services": ["StatsService"]},
+  "stats": {},
+  "policy": {"levels": {"0": {"statsUserUplink": true, "statsUserDownlink": true}}},
   "inbounds": [{
     "tag": "new-att-relay-in", "listen": "0.0.0.0", "port": ${ENTRY_PORT},
     "protocol": "vless",

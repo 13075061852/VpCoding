@@ -7,8 +7,9 @@
 #
 # The full check proves the deployed instance really works: it injects a
 # temporary client into the live config, completes a REALITY handshake against
-# the running service, fetches a URL through the tunnel, then restores the
-# original zero-state config. Any failure exits non-zero.
+# the running service, fetches a URL through the tunnel, confirms the
+# StatsService API reports that user's traffic, then restores the original
+# zero-state config. Any failure exits non-zero.
 set -Eeuo pipefail
 IFS=$'\n\t'
 
@@ -170,6 +171,17 @@ else
 fi
 
 if [[ "$MODE" == quick ]]; then
+  if [[ -f "$CONFIG" ]] && ! python3 - "$CONFIG" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+services = (d.get('api') or {}).get('services') or []
+level = ((d.get('policy') or {}).get('levels') or {}).get('0') or {}
+ok = 'StatsService' in services and 'stats' in d and level.get('statsUserUplink') and level.get('statsUserDownlink')
+sys.exit(0 if ok else 1)
+PY
+  then
+    echo '  [warn] StatsService traffic accounting is not enabled in the Xray config' >&2
+  fi
   echo 'Quick self-test finished.'
   exit "$rc"
 fi
@@ -235,6 +247,18 @@ if wait_port "$ENTRY_PORT" 40; then
   PUB="$("$XRAY" x25519 -i "$PRIVATE_KEY" | awk -F': ' '/PublicKey|Public key/{print $2; exit}')"
   if [[ -n "$PUB" ]] && run_client_probe "$ENTRY_PORT" "$SERVER_NAME" "$PUB" "$SHORT_ID" "$TEST_UUID"; then
     pass "REALITY handshake and proxied request through TCP ${ENTRY_PORT} (SNI ${SERVER_NAME})"
+    counter=""
+    for _ in {1..10}; do
+      counter="$("$XRAY" api statsquery --server=127.0.0.1:10085 -pattern 'user>>>__selftest__' 2>/dev/null || true)"
+      grep -q '__selftest__' <<<"$counter" && break
+      sleep 0.5
+    done
+    if grep -q '__selftest__' <<<"$counter"; then
+      pass "StatsService reports per-user traffic for __selftest__"
+    else
+      fail "StatsService did not report per-user traffic (api/stats/policy missing or API down)"
+      rc=1
+    fi
   else
     fail "REALITY handshake or proxied request through TCP ${ENTRY_PORT} (SNI ${SERVER_NAME})"
     rc=1

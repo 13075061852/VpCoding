@@ -23,3 +23,11 @@ jobs:
             test -f "relay_admin/$file"
           done
           test -f selftest.sh
+      - name: Traffic accounting wiring
+        run: |
+          grep -q 'StatsService' install.sh
+          grep -q 'statsUserUplink' install.sh
+          grep -q 'def ensure_stats_service' relay_admin/app.py
+          grep -q 'stats_service_config_needed' relay_admin/app.py
+          grep -q 'def forward_stats_keys' relay_admin/app.py
+          grep -q 'StatsService reports per-user traffic' selftest.sh

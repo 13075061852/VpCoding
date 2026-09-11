@@ -1,2 +1,3 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# Store all text with LF and check it out with LF, so the shell scripts keep
+# working on Linux even when the repository is cloned on Windows.
+* text=auto eol=lf

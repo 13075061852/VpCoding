@@ -833,23 +833,56 @@ APP_JS = r'''(() => {
       cells.status.replaceChildren(badge);
     }
   };
+  const testNodeRequest = async (form, row) => {
+    const body = new URLSearchParams();
+    const csrf = form.querySelector('input[name="csrf"]');
+    if (csrf) body.set('csrf', csrf.value);
+    body.set('node', row.dataset.node || '');
+    try {
+      const response = await fetch('/node/test', {method: 'POST', body, headers: {'Accept': 'application/json'}});
+      const data = await response.json().catch(() => ({}));
+      render(row, data.result || {error: data.error || '未返回检测结果'});
+    } catch (error) {
+      render(row, {error: error.message});
+    }
+  };
+  const testAllProgress = (button, original, done, total) => {
+    button.textContent = done < total ? `检测中 ${done}/${total}` : original;
+  };
+  const testAllNodes = async (form, rows, button, original) => {
+    const queue = rows.slice();
+    let done = 0;
+    testAllProgress(button, original, 0, rows.length);
+    const worker = async () => {
+      while (queue.length) {
+        const row = queue.shift();
+        await testNodeRequest(form, row);
+        done += 1;
+        testAllProgress(button, original, done, rows.length);
+      }
+    };
+    // Match the server's old concurrency limit so we never open one request per node.
+    await Promise.all(Array.from({length: Math.min(3, rows.length)}, worker));
+  };
   const submit = async (form, rows) => {
     const button = form.querySelector('button');
+    const original = button.textContent;
     button.disabled = true;
     rows.forEach(setLoading);
     try {
-      const body = new URLSearchParams(new FormData(form));
-      const response = await fetch(form.action, {method: 'POST', body, headers: {'Accept': 'application/json'}});
-      const data = await response.json();
       if (form.classList.contains('test-all-form')) {
-        rows.forEach(row => render(row, (data.results && data.results[row.dataset.node]) || {error: data.error || '未返回检测结果'}));
+        await testAllNodes(form, rows, button, original);
       } else {
+        const body = new URLSearchParams(new FormData(form));
+        const response = await fetch(form.action, {method: 'POST', body, headers: {'Accept': 'application/json'}});
+        const data = await response.json();
         render(rows[0], data.result || {error: data.error || '检测失败'});
       }
     } catch (error) {
       rows.forEach(row => render(row, {error: error.message}));
     } finally {
       button.disabled = false;
+      button.textContent = original;
     }
   };
   const pagination = {page: 1, pageSize: 10};

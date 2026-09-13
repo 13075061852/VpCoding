@@ -33,8 +33,7 @@ STATE_FILE = '/etc/node-admin/state.json'
 CERT_FILE = '/etc/node-admin/cert.pem'
 KEY_FILE = '/etc/node-admin/key.pem'
 BACKUP_DIR = '/var/backups/node-admin'
-PUBLIC_HOST = os.environ.get('PUBLIC_HOST', '').strip()
-RELAY_LABEL = os.environ.get('RELAY_LABEL', '中转控制台').strip() or '中转控制台'
+PUBLIC_HOST = os.environ.get('PUBLIC_HOST', '189.24.78.223')
 PORT = 8444
 XRAY = '/usr/local/bin/xray'
 STATS_API_ADDR = '127.0.0.1:10085'
@@ -53,7 +52,7 @@ CONFIGS = {
     'att': {'service': 'xray-att-relay.service', 'path': '/etc/xray-att-relay/config.json', 'inbound': 'new-att-relay-in', 'entry': 8443},
 }
 COUNTRY_HINTS = {
-    'direct': '本机直连',
+    'direct': '日本（本机直连）',
     'vircs-att': '美国',
     'latest-us-att': '美国',
     'ipfly-uae': '新加坡（配置标签 UAE；本次实测）',
@@ -506,7 +505,7 @@ def client_route_for(config_key, client_email, data, cfg):
         if outbound is not None:
             addr, port = endpoint(outbound)
             return default, addr, port, country_of(config_key, default), '入口默认'
-    return 'direct', '', '', '本机直连', 'Xray 默认出站'
+    return 'direct', '', '', '日本（本机直连）', 'Xray 默认出站'
 
 def country_of(config_key, tag, state=None):
     state = state if state is not None else load_state()
@@ -1524,6 +1523,7 @@ APP_JS = r'''(() => {
     }
   });
   /* CONSOLE_EXTENSION */
+  /* LOGIN_EXTENSION */
   updateConditionalFields();
   renderNodePagination();
   renderForwardPagination();
@@ -2201,16 +2201,120 @@ html.sidebar-pref-collapsed .app-shell .brand-copy,html.sidebar-pref-collapsed .
   color:#236735;
 }
 .flash.error{border-color:#f2c6c2;background:var(--red-soft);color:#b42318}
-.login-wrap{
+/* Login screen: split brand panel with a focused sign-in card. */
+.login-screen{
   min-height:100vh;
   display:grid;
-  place-items:center;
-  padding:24px;
+  grid-template-columns:minmax(0,1.12fr) minmax(420px,.88fr);
+  background:var(--bg);
 }
-.login-card{width:min(100%,410px);padding:30px}
-.login-mark{width:44px;height:44px;margin-bottom:18px;border-radius:13px;font-size:22px}
-.remember{display:flex;align-items:center;gap:7px;margin-top:13px;color:var(--muted);font-size:13px}
-.remember input{width:auto}
+.login-visual{
+  position:relative;isolation:isolate;overflow:hidden;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;padding:48px 56px;color:#fff;text-align:center;
+  background:radial-gradient(ellipse at 8% 8%,#34406b80,transparent 52%),
+    radial-gradient(ellipse at 92% 100%,#6554ce80,transparent 60%),
+    linear-gradient(150deg,#101a32,#1d2749 55%,#343575);
+}
+.login-visual::before{
+  content:'';position:absolute;inset:-15%;pointer-events:none;z-index:-1;
+  background:radial-gradient(ellipse at 70% 75%,#8270f82b,transparent 45%),
+    radial-gradient(ellipse at 25% 25%,#688fcb20,transparent 40%);
+  animation:login-nebula 24s ease-in-out infinite alternate;
+}
+.login-visual::after{
+  content:'';position:absolute;inset:0;pointer-events:none;z-index:-1;
+  background-image:radial-gradient(circle,#d5dfff88 .7px,transparent 1px),radial-gradient(circle,#c2caff55 .6px,transparent 1px);
+  background-size:113px 127px,79px 163px;background-position:19px 31px,47px 83px;opacity:.5;
+}
+.login-starfield{position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:-1}
+.login-particle{position:absolute;left:var(--x);top:var(--y);animation:login-drift var(--drift) ease-in-out var(--delay) infinite alternate}
+.login-particle i{display:block;width:var(--size);height:var(--size);border-radius:50%;background:#dfE7ff;opacity:.5;animation:login-twinkle var(--twinkle) ease-in-out var(--delay) infinite alternate}
+.login-particle.is-star i{border-radius:0;background:#eef2ff;clip-path:polygon(50% 0,61% 38%,100% 50%,61% 62%,50% 100%,39% 62%,0 50%,39% 38%)}
+.login-particle.is-glow i{box-shadow:0 0 7px 2px #b3b8ff55}
+.login-visual.is-paused::before,.login-visual.is-paused .login-particle,.login-visual.is-paused .login-particle i{animation-play-state:paused}
+@keyframes login-drift{from{transform:translate3d(0,8px,0)}to{transform:translate3d(var(--shift),-18px,0)}}
+@keyframes login-twinkle{from{opacity:.2;transform:scale(.75)}to{opacity:.9;transform:scale(1.12)}}
+@keyframes login-nebula{from{transform:translate3d(-2%,-2%,0) scale(1)}to{transform:translate3d(3%,3%,0) scale(1.08)}}
+.login-visual-copy{position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;max-width:560px}
+.login-brand-row{display:flex;align-items:center;gap:22px}
+.login-logo{
+  display:grid;
+  place-items:center;
+  width:56px;
+  height:56px;
+  border-radius:16px;
+  background:#fff;
+  color:#17243c;
+  font-size:26px;
+  font-weight:800;
+  box-shadow:0 10px 24px rgba(4,18,45,.28);
+}
+.login-visual-copy h1{margin:0;color:#fff;font-size:clamp(52px,5vw,72px);line-height:1;letter-spacing:-3px;text-shadow:0 4px 40px #111b3540}
+.login-tagline{margin:22px 0 0;font-size:20px;color:rgba(255,255,255,.92)}
+.login-subtagline{margin:14px 0 0;font-size:12px;letter-spacing:1.4px;color:#b9c3e4}
+.login-form-side{display:grid;place-items:center;padding:34px 42px;background:radial-gradient(ellipse at 50% 42%,#ebeaf780,transparent 70%),var(--bg)}
+.login-card{
+  width:min(100%,424px);
+  padding:38px 38px 30px;
+  border:1px solid var(--line-soft);
+  border-radius:24px;
+  background:var(--surface);
+  box-shadow:0 24px 70px rgba(32,38,74,.075),0 2px 8px rgba(32,38,74,.02);
+}
+.login-card h2{margin:0 0 6px;font-size:26px;letter-spacing:-.6px}
+.login-hint{margin:0 0 20px;color:var(--muted);font-size:13px}
+.login-card label{margin:16px 0 7px}
+.login-card input{padding:14px 13px}
+.login-card input:not([type=checkbox]){background:var(--surface);border-color:#dce1ed;transition:border-color .2s,box-shadow .2s}
+.login-card input:not([type=checkbox]):hover{border-color:#b7bada}
+.login-card input:not([type=checkbox]):focus{outline:none;border-color:#7770df;box-shadow:0 0 0 3px #7770df18}
+.login-card .password-field input{padding-right:46px}
+.login-card .remember input{accent-color:#645bd7}
+.login-card button:focus-visible{outline:3px solid #a6a0ef;outline-offset:3px}
+.password-field{position:relative;display:block}
+.password-field input{padding-right:46px}
+.password-toggle{
+  position:absolute;
+  top:50%;
+  right:7px;
+  display:grid;
+  place-items:center;
+  width:32px;
+  min-height:32px;
+  height:32px;
+  padding:0;
+  transform:translateY(-50%);
+  background:transparent;
+  color:var(--muted);
+}
+.password-toggle:hover{background:transparent;color:var(--text)}
+.password-toggle svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.password-toggle .eye-off{display:none}
+.password-toggle.is-visible .eye-open{display:none}
+.password-toggle.is-visible .eye-off{display:block}
+.remember{display:flex;align-items:center;gap:8px;margin:16px 0 0;color:var(--muted);font-size:13px;font-weight:400}
+.remember input{width:auto;accent-color:var(--blue)}
+.login-card .actions{display:block;margin-top:20px}
+.login-card .login-submit{width:100%;min-height:48px;border-radius:12px;font-size:14px;letter-spacing:.3px;background:linear-gradient(110deg,#6961df,#5954ce);color:#fff;border:1px solid transparent;box-shadow:0 5px 14px #625bd626;transition:transform .2s,box-shadow .2s,filter .2s}
+.login-card .login-submit:hover{filter:brightness(1.07);transform:translateY(-1px);box-shadow:0 8px 20px #625bd638}
+.login-card .login-submit:active{transform:translateY(0)}
+.login-card .form-error{margin:16px 0 0}
+.login-foot{margin:24px 0 0;padding-top:18px;border-top:1px solid var(--line-soft);text-align:center;font-size:12px;color:var(--muted)}
+@media(max-width:920px){
+  .login-screen{grid-template-columns:minmax(0,1fr)}
+  .login-visual{min-height:262px;max-height:min(56vh,460px);justify-content:center;padding:30px 24px 58px}
+  .login-visual-copy{max-width:520px}
+  .login-brand-row{gap:12px}
+  .login-visual-copy h1{margin-bottom:6px;font-size:32px;letter-spacing:-1px}
+  .login-tagline{margin-bottom:4px;font-size:15px}
+  .login-subtagline{font-size:12px}
+  .login-visual::before{opacity:.22}
+  .login-visual::after{opacity:.3}
+  .login-particle:nth-child(3n){display:none}
+  .login-form-side{position:relative;z-index:1;display:block;padding:0 18px 40px;margin-top:-46px;background:transparent}
+  .login-card{width:100%;max-width:460px;margin:0 auto;padding:28px 24px 22px;border-radius:20px}
+  .login-logo{width:40px;height:40px;border-radius:12px;font-size:19px}
+}
 .spinner{
   display:inline-block;
   width:14px;
@@ -2442,6 +2546,7 @@ html.sidebar-pref-collapsed .app-shell .brand-copy,html.sidebar-pref-collapsed .
 
 APP_JS = APP_JS.replace('  /* DELETE_DIALOG */', (APP_DIR / 'delete-dialog.js').read_text(encoding='utf-8'))
 APP_JS = APP_JS.replace('  /* CONSOLE_EXTENSION */', (APP_DIR / 'console.js').read_text(encoding='utf-8'))
+APP_JS = APP_JS.replace('  /* LOGIN_EXTENSION */', (APP_DIR / 'login.js').read_text(encoding='utf-8'))
 HTML_HEAD = HTML_HEAD.replace('</style>', (APP_DIR / 'console.css').read_text(encoding='utf-8') + '\n</style>')
 
 
@@ -2449,9 +2554,54 @@ def page(body, title='Relay · 中转控制台'):
     return HTML_HEAD.replace('{{TITLE}}', esc(title)).replace('{{BODY}}', body)
 
 
+LOGIN_EYE_ICON = (
+    '<svg viewBox="0 0 24 24" aria-hidden="true">'
+    '<path class="eye-open" d="M2.4 12S6 5.6 12 5.6 21.6 12 21.6 12 18 18.4 12 18.4 2.4 12 2.4 12Z"/>'
+    '<circle class="eye-open" cx="12" cy="12" r="3.1"/>'
+    '<path class="eye-off" d="M4.5 4.5l15 15"/>'
+    '<path class="eye-off" d="M9.1 9.1a4.2 4.2 0 0 0 5.8 5.8"/>'
+    '</svg>'
+)
+
+
 def login_page(error=''):
-    message = '<div class="flash error">%s</div>' % esc(error) if error else ''
-    body = '<section class="login-wrap"><div class="card login-card"><div class="login-mark">R</div><h1>Relay</h1><p class="muted">安全的中转节点管理</p>%s<form method="post" action="/login"><label>账户</label><input name="username" autocomplete="username" required autofocus><label>密码</label><input type="password" name="password" autocomplete="current-password" required><label class="remember"><input type="checkbox" name="remember" value="1" checked>保持登录 30 天</label><div class="actions"><button type="submit">登录管理面板</button></div></form></div></section>' % message
+    message = '<div class="form-error" role="alert">%s</div>' % esc(error) if error else ''
+    body = (
+        '<section class="login-screen">'
+        '<aside class="login-visual">'
+        '<div class="login-starfield" aria-hidden="true"></div>'
+        '<div class="login-visual-copy">'
+        '<div class="login-brand-row">'
+        '<span class="login-logo" aria-hidden="true">R</span>'
+        '<h1>Relay</h1>'
+        '</div>'
+        '<p class="login-tagline">安全的中转节点管理</p>'
+        '<p class="login-subtagline">Xray 节点控制台</p>'
+        '</div>'
+        '</aside>'
+        '<div class="login-form-side">'
+        '<div class="login-card">'
+        '<h2>欢迎回来</h2>'
+        '<p class="login-hint">登录以继续管理你的节点</p>'
+        '%s'
+        '<form method="post" action="/login">'
+        '<label for="login-username">账户</label>'
+        '<input id="login-username" name="username" autocomplete="username" required autofocus>'
+        '<label for="login-password">密码</label>'
+        '<div class="password-field">'
+        '<input id="login-password" type="password" name="password" autocomplete="current-password" required>'
+        '<button type="button" class="password-toggle" data-password-toggle aria-label="显示密码" aria-pressed="false">%s</button>'
+        '</div>'
+        '<label class="remember" for="login-remember">'
+        '<input id="login-remember" type="checkbox" name="remember" value="1" checked>保持登录 30 天'
+        '</label>'
+        '<div class="actions"><button type="submit" class="login-submit">登录管理面板</button></div>'
+        '</form>'
+        '<p class="login-foot">仅限授权用户访问</p>'
+        '</div>'
+        '</div>'
+        '</section>'
+    ) % (message, LOGIN_EYE_ICON)
     return page(body, '登录 · Relay')
 
 
@@ -2580,7 +2730,7 @@ def dashboard(csrf, flash='', error='', active_view='nodes-view'):
     parts = [
         '<div class="app-shell sidebar-initializing"><aside class="sidebar" id="app-sidebar">'
         '<div class="brand"><div class="brand-mark">R</div>'
-        '<div class="brand-copy"><b>Relay</b><span>%s</span></div>'
+        '<div class="brand-copy"><b>Relay</b><span>香港 · 中转控制台</span></div>'
         '<button type="button" class="sidebar-toggle" data-sidebar-toggle aria-controls="app-sidebar" aria-expanded="true" aria-label="收起侧边栏" title="收起侧边栏">'
         '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 6-6 6 6 6"/></svg></button></div>'
         '<nav class="side-nav" aria-label="功能导航">'
@@ -2591,7 +2741,7 @@ def dashboard(csrf, flash='', error='', active_view='nodes-view'):
         '<button type="button" class="nav-item%s" data-view-target="host-view" data-view-url="/host" data-view-title="主机状态" title="主机状态">'
         '<span class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4z"/><path d="M7 15l2-3 2 2 3-4 3 5"/><path d="M8 9h.01"/></svg></span><span class="nav-label">主机状态</span></button>'
         '</nav><div class="sidebar-bottom"><div class="sidebar-host"><span class="online-dot %s"></span>'
-        '<div><b>%s</b><span>%s</span></div></div><form class="confirm-logout-form" method="post" action="/logout"><input type="hidden" name="csrf" value="%s"><button class="secondary logout-button" type="submit" aria-label="安全退出" title="安全退出">安全退出</button></form></div></aside><div class="workspace">' % (esc(RELAY_LABEL), ' active' if active_view == 'nodes-view' else '', ' active' if active_view == 'forward-view' else '', ' active' if active_view == 'host-view' else '', '' if all_services_healthy else 'offline', esc(RELAY_LABEL), esc(PUBLIC_HOST), esc_csrf)
+        '<div><b>香港中转</b><span>%s</span></div></div><form class="confirm-logout-form" method="post" action="/logout"><input type="hidden" name="csrf" value="%s"><button class="secondary logout-button" type="submit" aria-label="安全退出" title="安全退出">安全退出</button></form></div></aside><div class="workspace">' % (' active' if active_view == 'nodes-view' else '', ' active' if active_view == 'forward-view' else '', ' active' if active_view == 'host-view' else '', '' if all_services_healthy else 'offline', esc(PUBLIC_HOST), esc_csrf)
     ]
 
     if flash:
@@ -2666,7 +2816,7 @@ def dashboard(csrf, flash='', error='', active_view='nodes-view'):
          '<div class="subscription-browser"><div class="subscription-node-list">%s</div></div></section>'
          '<div class="forward-search-field"><label>搜索节点</label><input type="search" data-subscription-node-search placeholder="用户、地区、地址或端口" aria-label="搜索节点和用户"></div><div class="forward-name-field"><label data-forward-label>转发名称</label><input name="label" placeholder="例如：台湾住宅出口" required maxlength="80"></div><div class="forward-quota-field"><label>流量额度 GB</label><input name="quota_total_gb" type="number" min="1" step="1" value="500" required></div><div class="forward-expire-field"><label>到期日期（当日 00:00 停止）</label><input name="quota_expires_on" type="date" value="%s" required></div>'
          '<div class="forward-mode-field"><label>输出方式</label><div class="mode"><label><input type="radio" name="mode" value="socks" checked>SOCKS5</label>'
-         '<label><input type="radio" name="mode" value="vless">VLESS</label><label><input type="radio" name="mode" value="subscription">FastClient 订阅</label></div></div></div>'
+         '<label><input type="radio" name="mode" value="http">HTTP</label><label><input type="radio" name="mode" value="vless">VLESS</label><label><input type="radio" name="mode" value="subscription">FastClient 订阅</label></div></div></div>'
          '<div class="forward-secondary">'
          '<div class="actions"><button type="submit">创建并启用转发</button><button type="button" class="secondary" data-modal-close>取消</button></div>'
          '</div></div></form></section></div>') % (esc_csrf, forward_node_options, subscription_node_cards, (date.today() + timedelta(days=30)).isoformat())
@@ -2698,7 +2848,7 @@ def dashboard(csrf, flash='', error='', active_view='nodes-view'):
             delete_form = '<form class="confirm-delete-form async-form" data-return-view="forward-view" method="post" action="/forward/delete"><input type="hidden" name="csrf" value="%s"><input type="hidden" name="id" value="%s"><input type="hidden" name="confirm" value="1"><button class="danger">删除</button></form>' % (esc_csrf, esc(row['id']))
             status = row.get('status', {'class': 'neutral', 'text': '未设置'})
             status_cell = '<span class="status-badge %s">%s</span>' % (esc(status.get('class', 'neutral')), esc(status.get('text', '')))
-            parts.append('<tr class="forward-row"><td><b>%s</b></td><td><span class="kind %s">%s</span></td><td class="mono">%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td><div class="row-actions"><button type="button" class="secondary copy-link" data-copy-value="%s" aria-label="复制 %s 的访问或导入信息">复制链接</button><button type="button" class="secondary qr-link" data-qr-forward="%s" data-qr-label="%s" data-qr-value="%s">二维码</button></div></td><td><div class="row-actions">%s%s</div></td></tr>' % (esc(row['label']), 'vless' if row['mode'] != 'socks' else '', esc(row['mode_name']), upstream_ip_cell, esc(upstream_country), esc(upstream_user), esc(row.get('quota_total_display', '未设置')), esc(row.get('quota_used_display', '0B')), esc(row.get('expires_on', '未设置')), status_cell, esc(value), esc(row['label']), esc(row['id']), esc(row['label']), esc(value), rename, delete_form))
+            parts.append('<tr class="forward-row"><td><b>%s</b></td><td><span class="kind %s">%s</span></td><td class="mono">%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td><div class="row-actions"><button type="button" class="secondary copy-link" data-copy-value="%s" aria-label="复制 %s 的访问或导入信息">复制链接</button><button type="button" class="secondary qr-link" data-qr-forward="%s" data-qr-label="%s" data-qr-value="%s">二维码</button></div></td><td><div class="row-actions">%s%s</div></td></tr>' % (esc(row['label']), 'http' if row['mode'] == 'http' else ('vless' if row['mode'] != 'socks' else ''), esc(row['mode_name']), upstream_ip_cell, esc(upstream_country), esc(upstream_user), esc(row.get('quota_total_display', '未设置')), esc(row.get('quota_used_display', '0B')), esc(row.get('expires_on', '未设置')), status_cell, esc(value), esc(row['label']), esc(row['id']), esc(row['label']), esc(value), rename, delete_form))
     else:
         parts.append('<tr><td colspan="11" class="empty">尚未创建转发。先选择一个可用节点。</td></tr>')
     parts.append('</tbody></table></div><div class="table-pagination" data-forward-pagination><span class="muted" data-forward-pagination-summary>共 0 条转发</span><div class="pagination-controls"><button type="button" class="secondary" data-forward-pagination-prev disabled>上一页</button><div class="pagination-pages" data-forward-pagination-pages></div><button type="button" class="secondary" data-forward-pagination-next disabled>下一页</button></div></div></section></section>')
@@ -2913,10 +3063,10 @@ def xray_stats_query(pattern='user>>>'):
 def forward_stats_keys(item):
     """Return the Xray StatsService keys that carry a forward's traffic.
 
-    VLESS/Reality and FastClient clients report under their email, while a
-    SOCKS5 inbound reports under its account username.
+    VLESS/Reality and FastClient clients report under their email, while SOCKS5
+    and HTTP inbounds report under their account username.
     """
-    if item.get('mode') == 'socks':
+    if item.get('mode') in ('socks', 'http'):
         user = item.get('access_user')
         return [user] if isinstance(user, str) and user else []
     emails = item.get('emails')
@@ -3012,12 +3162,12 @@ def forwarding_rows(state, clients):
             value = item.get('url', '')
             name = 'FastClient 订阅'
             upstream = item.get('upstream', 'ran-us-residential')
-        elif mode == 'socks':
+        elif mode in ('socks', 'http'):
             auth = ''
             if item.get('access_user'):
                 auth = quote(item['access_user'], safe='') + ':' + quote(item.get('access_password', ''), safe='') + '@'
-            value = 'socks5://%s%s:%s' % (auth, PUBLIC_HOST, item['listen_port'])
-            name = 'SOCKS5'
+            value = '%s://%s%s:%s' % ('socks5' if mode == 'socks' else 'http', auth, PUBLIC_HOST, item['listen_port'])
+            name = 'SOCKS5' if mode == 'socks' else 'HTTP'
             upstream = item.get('upstream', '')
         else:
             if mode == 'subscription':
@@ -3093,7 +3243,7 @@ def upstream_tcp_latency(address, port):
         except OSError as exc:
             last_error = exc
     if not samples:
-        raise RuntimeError('本机连接节点失败：%s' % last_error)
+        raise RuntimeError('日本机房连接节点失败：%s' % last_error)
     samples.sort()
     return max(1, int(samples[len(samples) // 2]))
 
@@ -3417,7 +3567,7 @@ def parse_forward_quota(form):
 def create_forward(form):
     label = form.get('label', '').strip()
     mode = form.get('mode', '')
-    if not label or len(label) > 80 or '\n' in label or '\r' in label or mode not in ('socks', 'vless', 'subscription'):
+    if not label or len(label) > 80 or '\n' in label or '\r' in label or mode not in ('socks', 'http', 'vless', 'subscription'):
         raise ValueError('转发名称或输出方式无效')
     quota_data = parse_forward_quota(form)
     if quota_data['quota_expire'] <= time.time():
@@ -3444,15 +3594,19 @@ def create_forward(form):
         cfg = CONFIGS[target_key]
         data = read_config(cfg)
         state = load_state()
-        if mode == 'socks':
+        if mode in ('socks', 'http'):
             listen_port = allocate_socks_port()
-            user = 'socks-' + ident
+            user = ('http-' if mode == 'http' else 'socks-') + ident
             password = secrets.token_urlsafe(24)
-            in_tag = 'forward-socks-' + ident
+            in_tag = 'forward-' + mode + '-' + ident
             settings = {'auth': 'password', 'accounts': [{'user': user, 'pass': password}]}
-            data.setdefault('inbounds', []).append({'tag': in_tag, 'listen': '0.0.0.0', 'port': listen_port, 'protocol': 'socks', 'settings': settings})
+            if mode == 'socks':
+                # Advertise the public IPv4 address for remote UDP ASSOCIATE clients.
+                settings['udp'] = True
+                settings['ip'] = socket.gethostbyname(PUBLIC_HOST)
+            data.setdefault('inbounds', []).append({'tag': in_tag, 'listen': '0.0.0.0', 'port': listen_port, 'protocol': mode, 'settings': settings})
             data.setdefault('routing', {}).setdefault('rules', []).append({'type': 'field', 'inboundTag': [in_tag], 'outboundTag': upstream_tag})
-            state['forward_meta'][ident] = {'mode': 'socks', 'label': label, 'config': target_key,
+            state['forward_meta'][ident] = {'mode': mode, 'label': label, 'config': target_key,
                                             'upstream_config': upstream_key, 'upstream': upstream_tag,
                                             'inbound_tag': in_tag, 'listen_port': listen_port, 'access_user': user,
                                             'access_password': password, **quota_data}
@@ -3500,6 +3654,8 @@ def create_forward(form):
                                             'client_key': client_key_value, 'email': email, **quota_data}
         if mode == 'socks':
             value = 'socks5://%s:%s@%s:%s' % (quote(user, safe=''), quote(password, safe=''), PUBLIC_HOST, listen_port)
+        elif mode == 'http':
+            value = 'http://%s:%s@%s:%s' % (quote(user, safe=''), quote(password, safe=''), PUBLIC_HOST, listen_port)
         elif mode == 'subscription':
             value = 'https://%s:%d/sub/forward/%s' % (PUBLIC_HOST, PORT, state['forward_meta'][ident]['subscription_token'])
         else:
@@ -3510,7 +3666,7 @@ def create_forward(form):
 
 def forward_dependency_rows(state, config_key, tag):
     """Return forwarding services that route through the selected upstream node."""
-    mode_names = {'socks': 'SOCKS5', 'vless': 'VLESS', 'subscription': 'FastClient 订阅',
+    mode_names = {'socks': 'SOCKS5', 'http': 'HTTP', 'vless': 'VLESS', 'subscription': 'FastClient 订阅',
                   'external_subscription': 'FastClient 订阅'}
     result = []
     service_cache = {}
@@ -3608,7 +3764,7 @@ def remove_forward_from_data(item, state, data, cfg):
         client_keys = [item.get('client_key')] if item.get('client_key') else []
     if item.get('mode') == 'external_subscription' and not emails:
         return
-    if item.get('mode') == 'socks':
+    if item.get('mode') in ('socks', 'http'):
         in_tag = item.get('inbound_tag')
         data['inbounds'] = [x for x in data.get('inbounds', []) if x.get('tag') != in_tag]
         data.setdefault('routing', {})['rules'] = [
@@ -4468,8 +4624,6 @@ class BoundedThreadingHTTPServer(ThreadingHTTPServer):
 def main():
     if os.geteuid() != 0:
         raise SystemExit('must run as root')
-    if not PUBLIC_HOST:
-        raise SystemExit('PUBLIC_HOST must be configured')
     load_state()
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.minimum_version = ssl.TLSVersion.TLSv1_2

@@ -13,7 +13,7 @@ th{background:#f6f8fc;color:#718099;font-size:11px;letter-spacing:.3px}td{border
 .console-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-bottom:28px}.console-stat{padding:19px 21px;border:1px solid var(--line);border-radius:16px;background:var(--surface);box-shadow:var(--shadow)}.console-stat span{font-size:12px;color:var(--muted)}.console-stat b{display:block;margin:7px 0 4px;font-size:29px;letter-spacing:-1px;font-variant-numeric:tabular-nums}.console-stat small{color:var(--muted);font-size:11px}.console-stat.attention b{color:#b66b10}
 .console-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:16px;border-bottom:1px solid var(--line-soft)}.console-toolbar input{flex:1;min-width:160px;max-width:360px;margin:0}.console-toolbar select{width:auto;margin:0;max-width:160px}.console-toolbar button{white-space:nowrap}.console-toolbar .console-count{color:var(--muted);font-size:11px;margin-left:auto}.console-empty{padding:35px;text-align:center;color:var(--muted)}.console-empty b{display:block;color:var(--text);margin-bottom:6px}.console-note{font-size:12px;color:var(--muted);margin-top:12px}
 .console-ops{margin-top:22px;padding:22px}.console-ops h3{margin-bottom:5px}.console-ops p{color:var(--muted);font-size:12px}.console-ops .actions{margin:14px 0}.console-ops table{width:100%;font-size:12px}.console-ops td{padding:11px}.console-ops time{white-space:nowrap}.console-op-status{min-height:22px;font-size:12px;color:var(--muted)}.console-toast{position:fixed;right:24px;bottom:26px;z-index:200;background:#17243c;color:#fff;box-shadow:0 8px 30px #0003;padding:12px 20px;border-radius:12px;max-width:min(440px,90vw)}
-.modal-backdrop{background:#101d365e;backdrop-filter:blur(5px)}.modal-panel{box-shadow:0 24px 90px #10244c30;border:1px solid #ffffff80;animation:console-enter .18s ease-out}.login-wrap{background:radial-gradient(ellipse at 15% 15%,#4169e127,transparent 55%)}.login-card{padding:38px;border:1px solid var(--line);box-shadow:0 20px 70px #142c5c12}.login-card h1{letter-spacing:1px}.login-card .actions button{width:100%}
+.modal-backdrop{background:#101d365e;backdrop-filter:blur(5px)}.modal-panel{box-shadow:0 24px 90px #10244c30;border:1px solid #ffffff80;animation:console-enter .18s ease-out}.login-card .actions button{width:100%}
 @keyframes console-enter{from{opacity:0;transform:translateY(8px) scale(.99)}to{opacity:1;transform:none}}
 @media(min-width:761px){.nodes-panel .tablewrap{border-radius:0}.console-header{min-height:62px}.table-pagination{padding:14px 16px}.pagination-pages{max-width:240px}}
 @media(max-width:1100px){.workspace{padding:24px 18px}.console-stats{gap:10px}.console-stat{padding:15px}}
@@ -66,3 +66,13 @@ th{background:#f6f8fc;color:#718099;font-size:11px;letter-spacing:.3px}td{border
 .delete-modal-panel .actions button.danger{background:#d94b43;border-color:#d94b43;color:white;box-shadow:0 3px 8px #d94b4318}.delete-modal-panel .actions button.danger:hover{background:#c43c35;border-color:#c43c35}.delete-modal-panel button:disabled{opacity:.55;box-shadow:none;cursor:wait}
 @media(max-width:520px){.delete-modal-panel{padding:22px;width:100%}.delete-modal-panel .actions button{flex:1;padding-inline:10px}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+
+/* Desktop console fills the viewport: the table body scrolls instead of the whole page. */
+@media(min-width:921px){
+  .app-shell{min-height:0;height:100vh;height:100dvh}
+  .workspace{min-height:0;height:100%;overflow-y:auto}
+  .nodes-view{flex:1 1 auto}
+  .nodes-panel{flex:1 1 auto}
+  .nodes-panel .tablewrap{flex:1 1 auto}
+}
+body.modal-open .workspace{overflow:hidden}

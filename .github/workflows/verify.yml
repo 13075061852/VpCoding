@@ -19,7 +19,7 @@ jobs:
         run: python3 -m py_compile relay_admin/app.py relay_admin/operations.py
       - name: Ensure the package has all runtime assets
         run: |
-          for file in app.py operations.py console.css console.js delete-dialog.js; do
+          for file in app.py operations.py console.css console.js delete-dialog.js login.js; do
             test -f "relay_admin/$file"
           done
           test -f selftest.sh

@@ -104,7 +104,7 @@ if [[ ! -f "$SOURCE_DIR/relay_admin/app.py" ]]; then
   git clone --depth 1 "$RELAY_REPO" "$TMP_REPO/repo"
   SOURCE_DIR="$TMP_REPO/repo"
 fi
-for file in app.py operations.py console.css console.js delete-dialog.js; do
+for file in app.py operations.py console.css console.js delete-dialog.js login.js; do
   [[ -f "$SOURCE_DIR/relay_admin/$file" ]] || { echo "Package is missing relay_admin/$file" >&2; exit 1; }
 done
 [[ -f "$SOURCE_DIR/selftest.sh" ]] || { echo 'Package is missing selftest.sh' >&2; exit 1; }
@@ -200,7 +200,7 @@ PY
 admin_user="$(sed -n '1p' <<<"$credentials")"
 admin_password="$(sed -n '2p' <<<"$credentials")"
 
-for file in app.py operations.py console.css console.js delete-dialog.js; do
+for file in app.py operations.py console.css console.js delete-dialog.js login.js; do
   install -m 0640 "$SOURCE_DIR/relay_admin/$file" "/opt/node-admin/$file"
 done
 cat > /etc/systemd/system/xray-att-relay.service <<'EOF'

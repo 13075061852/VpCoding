@@ -12,7 +12,16 @@ jobs:
       - name: Reject private runtime artifacts
         run: |
           ! git ls-files | grep -E '(^|/)(admin\.json|state\.json|config\.json|[^/]+\.(pem|key|crt)|relay-admin-credentials\.txt)$'
-          ! grep -RInE 'BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|password_hash.{0,80}[A-Za-z0-9_-]{20,}' -- . --exclude-dir=.git
+          if git grep -nE 'BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|password_hash.{0,80}[A-Za-z0-9_-]{20,}' -- ':!.github/workflows/verify.yml'; then exit 1; fi
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test dependencies
+        run: python -m pip install qrcode
+      - name: Backend regression tests
+        env:
+          PYTHONPATH: relay_admin
+        run: python -m unittest discover -s tests -v
       - name: Shell syntax
         run: bash -n install.sh update.sh selftest.sh
       - name: Python syntax

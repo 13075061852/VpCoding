@@ -33,7 +33,7 @@ STATE_FILE = '/etc/node-admin/state.json'
 CERT_FILE = '/etc/node-admin/cert.pem'
 KEY_FILE = '/etc/node-admin/key.pem'
 BACKUP_DIR = '/var/backups/node-admin'
-PUBLIC_HOST = os.environ.get('PUBLIC_HOST', '189.24.78.223')
+PUBLIC_HOST = os.environ.get('PUBLIC_HOST', '').strip()
 PORT = 8444
 XRAY = '/usr/local/bin/xray'
 STATS_API_ADDR = '127.0.0.1:10085'
@@ -51,14 +51,7 @@ PATH_VIEWS = {path: view for view, path in VIEW_PATHS.items()}
 CONFIGS = {
     'att': {'service': 'xray-att-relay.service', 'path': '/etc/xray-att-relay/config.json', 'inbound': 'new-att-relay-in', 'entry': 8443},
 }
-COUNTRY_HINTS = {
-    'direct': '日本（本机直连）',
-    'vircs-att': '美国',
-    'latest-us-att': '美国',
-    'ipfly-uae': '新加坡（配置标签 UAE；本次实测）',
-    'indonesia-att': '印度尼西亚',
-    'taiwan-residential': '台湾',
-}
+COUNTRY_HINTS = {'direct': '本机直连'}
 MANAGED_PROTOCOLS = {'vless', 'http', 'socks'}
 VALID_TAG = re.compile(r'^[A-Za-z0-9_.-]{1,80}$')
 VALID_ADDRESS = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.:-]{0,252}$')
@@ -305,7 +298,7 @@ def wait_service_healthy(cfg, timeout=5):
 def write_config_json(cfg, data):
     validate_config_references(data)
     path = cfg['path']
-    old_bytes = open(path, 'rb').read()
+    old_bytes = Path(path).read_bytes()
     old_mode = stat.S_IMODE(os.stat(path).st_mode)
     new_bytes = (json.dumps(data, ensure_ascii=False, indent=2) + '\n').encode()
     fd, tmp = tempfile.mkstemp(prefix='.node-admin-test-', suffix='.json', dir=os.path.dirname(path))
@@ -324,18 +317,18 @@ def write_config_json(cfg, data):
             cfg['service'].replace('.service', ''), time.time_ns(), secrets.token_hex(3)))
         atomic_write(backup, old_bytes, old_mode)
         os.replace(tmp, path)
-        restarted = subprocess.run(['systemctl', 'restart', cfg['service']], capture_output=True, text=True, timeout=25)
         try:
+            restarted = subprocess.run(['systemctl', 'restart', cfg['service']], capture_output=True, text=True, timeout=25)
             if restarted.returncode != 0:
                 raise RuntimeError((restarted.stderr or restarted.stdout).strip()[-800:])
             wait_service_healthy(cfg)
         except Exception as exc:
             atomic_write(path, old_bytes, old_mode)
-            subprocess.run(['systemctl', 'restart', cfg['service']], capture_output=True, timeout=25)
             try:
+                subprocess.run(['systemctl', 'restart', cfg['service']], capture_output=True, timeout=25, check=True)
                 wait_service_healthy(cfg)
-            except Exception:
-                pass
+            except Exception as recovery:
+                raise RuntimeError('原配置已恢复，但服务恢复失败，请检查服务日志：' + str(recovery)) from exc
             raise RuntimeError('服务重启失败，已自动回滚：' + str(exc))
         return old_bytes, old_mode, backup
     finally:
@@ -352,7 +345,13 @@ def restore_config(cfg, old_bytes, old_mode):
 
 
 def commit_config_and_state(cfg, data, state):
-    old_state = open(STATE_FILE, 'rb').read() if os.path.exists(STATE_FILE) else None
+    update_traffic_stats()
+    latest = load_state()
+    for key, item in state.get('forward_meta', {}).items():
+        for name, value in latest.get('forward_meta', {}).get(key, {}).items():
+            if name.startswith('traffic_') or name in ('quota_upload_bytes', 'quota_download_bytes', 'quota_checked_at'):
+                item[name] = value
+    old_state = Path(STATE_FILE).read_bytes() if os.path.exists(STATE_FILE) else None
     old_state_mode = stat.S_IMODE(os.stat(STATE_FILE).st_mode) if old_state is not None else 0o600
     old_bytes, old_mode, backup = write_config_json(cfg, data)
     try:
@@ -505,7 +504,7 @@ def client_route_for(config_key, client_email, data, cfg):
         if outbound is not None:
             addr, port = endpoint(outbound)
             return default, addr, port, country_of(config_key, default), '入口默认'
-    return 'direct', '', '', '日本（本机直连）', 'Xray 默认出站'
+    return 'direct', '', '', '本机直连', 'Xray 默认出站'
 
 def country_of(config_key, tag, state=None):
     state = state if state is not None else load_state()
@@ -820,7 +819,7 @@ APP_JS = r'''(() => {
       return;
     }
     if (cells.latency) cells.latency.replaceChildren(latencyElement(result.latency_ms));
-    if (cells.speed) cells.speed.textContent = `${result.speed_mbps} Mbps`;
+    if (cells.speed) cells.speed.textContent = result.speed_mbps == null ? '—' : `${result.speed_mbps} Mbps`;
     if (cells.purity) cells.purity.textContent = result.purity || '未知';
     if (cells.checked) cells.checked.textContent = formatCheckedAt(result.checked_at);
     if (cells.status) {
@@ -3075,13 +3074,32 @@ def forward_stats_keys(item):
     return [value for value in emails if isinstance(value, str) and value]
 
 
+def stats_service_generation():
+    try:
+        result = subprocess.run(['systemctl', 'show', CONFIGS['att']['service'],
+            '--property=InvocationID', '--value'], capture_output=True, text=True, timeout=5)
+        return result.stdout.strip() if result.returncode == 0 else ''
+    except (OSError, subprocess.TimeoutExpired):
+        return ''
+
+
 def update_traffic_stats():
+    # Serialize sampling as well as persistence: a late older sample must not
+    # be mistaken for a reset after a newer sample has already been saved.
+    with MUTEX:
+        return _update_traffic_stats_locked()
+
+
+def _update_traffic_stats_locked():
     """Refresh per-forward traffic counters from Xray StatsService.
 
     Xray's StatsService counters are in-memory and reset when Xray restarts, so
     we store the last raw counter and add deltas to the persisted usage total.
     """
+    generation = stats_service_generation()
     stats = xray_stats_query('user>>>')
+    if not generation or generation != stats_service_generation():
+        return False
     if stats is None:
         return False
     changed = False
@@ -3095,9 +3113,11 @@ def update_traffic_stats():
                 raw_download += int(stats.get('user>>>%s>>>traffic>>>downlink' % key, 0))
             last_upload = int(item.get('traffic_last_raw_upload') or 0)
             last_download = int(item.get('traffic_last_raw_download') or 0)
-            delta_upload = raw_upload - last_upload if raw_upload >= last_upload else raw_upload
-            delta_download = raw_download - last_download if raw_download >= last_download else raw_download
-            if delta_upload or delta_download or item.get('traffic_last_raw_upload') is None:
+            reset = bool(item.get('traffic_generation') and item['traffic_generation'] != generation)
+            delta_upload = raw_upload - last_upload if not reset and raw_upload >= last_upload else raw_upload
+            delta_download = raw_download - last_download if not reset and raw_download >= last_download else raw_download
+            if delta_upload or delta_download or item.get('traffic_generation') != generation or item.get('traffic_last_raw_upload') is None:
+                item['traffic_generation'] = generation
                 item['quota_upload_bytes'] = int(item.get('quota_upload_bytes') or 0) + max(0, delta_upload)
                 item['quota_download_bytes'] = int(item.get('quota_download_bytes') or 0) + max(0, delta_download)
                 item['traffic_last_raw_upload'] = raw_upload
@@ -3199,11 +3219,11 @@ def curl_config_line(name, value):
     return '%s = "%s"\n' % (name, str(value).replace('\\', '\\\\').replace('"', '\\"').replace('\n', ''))
 
 
-def proxy_curl(proxy_url, username, password, url, metric=''):
+def proxy_curl(proxy_url, username, password, url, metric='', connect_timeout=10, max_time=25):
     """Run curl through a proxy using a mode-0600 config file, never argv credentials."""
     fd, path = tempfile.mkstemp(prefix='.node-admin-curl-', text=True)
     try:
-        lines = [curl_config_line('proxy', proxy_url), curl_config_line('max-time', '25'), curl_config_line('connect-timeout', '10'), curl_config_line('url', url)]
+        lines = [curl_config_line('proxy', proxy_url), curl_config_line('max-time', str(max_time)), curl_config_line('connect-timeout', str(connect_timeout)), curl_config_line('url', url)]
         if username:
             lines.append(curl_config_line('proxy-user', username + ':' + password))
         if metric:
@@ -3221,6 +3241,65 @@ def proxy_curl(proxy_url, username, password, url, metric=''):
             os.unlink(path)
         except OSError:
             pass
+
+
+def probe_proxy_exit_ip(proxy_url, username, password):
+    """A failed third-party endpoint must not mark a working proxy offline."""
+    import ipaddress
+    endpoints = (
+        ('https://api.ip.sb/ip', False),
+        ('https://www.cloudflare.com/cdn-cgi/trace', True),
+        ('https://api.ipify.org', False),
+    )
+    failures = []
+    for url, trace in endpoints:
+        try:
+            body = proxy_curl(proxy_url, username, password, url,
+                              connect_timeout=5, max_time=7)
+            value = body.strip()
+            if trace:
+                value = next((line[3:].strip() for line in body.splitlines()
+                              if line.startswith('ip=')), '')
+            address = ipaddress.ip_address(value)
+            if address.version != 4 or not address.is_global:
+                raise ValueError('invalid public IPv4')
+            return str(address)
+        except (RuntimeError, ValueError, subprocess.TimeoutExpired):
+            failures.append(url.split('/')[2])
+    raise RuntimeError('代理出口检测失败：多个检测地址均未返回有效出口 IP（' +
+                       '、'.join(failures) + '），请检查代理连接或稍后重试')
+
+
+def probe_optional_metrics(proxy_url, username, password, exit_ip):
+    result = {'speed_mbps': None, 'purity': '未知', 'signals': [],
+              'country': '未知', 'isp': '', 'warnings': []}
+    started = time.monotonic()
+    try:
+        import math
+        speed = float(proxy_curl(proxy_url, username, password,
+                      'https://speed.cloudflare.com/__down?bytes=3000000', metric='speed'))
+        if not math.isfinite(speed) or speed < 0:
+            raise ValueError('invalid speed')
+        result['speed_mbps'] = round(speed * 8 / 1000000, 2)
+    except (RuntimeError, ValueError, subprocess.TimeoutExpired):
+        result['warnings'].append('测速暂不可用，代理连接正常')
+    result['elapsed_ms'] = int((time.monotonic() - started) * 1000)
+    try:
+        response = subprocess.run(['curl', '-fsS', '--max-time', '8',
+            'http://ip-api.com/json/%s?fields=status,country,isp,org,proxy,hosting,mobile' % exit_ip],
+            capture_output=True, text=True, timeout=12)
+        profile = json.loads(response.stdout) if response.returncode == 0 else {}
+        if not isinstance(profile, dict) or profile.get('status') != 'success':
+            raise ValueError('lookup unavailable')
+        result.update(country=translate_country(profile.get('country', '未知')),
+                      isp=str(profile.get('isp', ''))[:100])
+        if all(isinstance(profile.get(key), bool) for key in ('proxy', 'hosting')):
+            signals = [key for key in ('proxy', 'hosting') if profile[key]]
+            result['signals'] = signals
+            result['purity'] = '较高' if not signals else ('一般' if len(signals) == 1 else '较低')
+    except (ValueError, subprocess.TimeoutExpired):
+        result['warnings'].append('IP 信息查询暂不可用')
+    return result
 
 
 def free_loopback_port():
@@ -3243,7 +3322,7 @@ def upstream_tcp_latency(address, port):
         except OSError as exc:
             last_error = exc
     if not samples:
-        raise RuntimeError('日本机房连接节点失败：%s' % last_error)
+        raise RuntimeError('本机连接节点失败：%s' % last_error)
     samples.sort()
     return max(1, int(samples[len(samples) // 2]))
 
@@ -3308,9 +3387,7 @@ def probe_outbound(outbound):
                 raise RuntimeError('VLESS 测试通道启动超时')
             username = password = ''
             proxy_url = 'socks5h://127.0.0.1:%s' % local_port
-        exit_ip = proxy_curl(proxy_url, username, password, 'https://api.ipify.org')
-        if not re.fullmatch(r'\d{1,3}(?:\.\d{1,3}){3}', exit_ip):
-            raise RuntimeError('未获取到有效出口 IP')
+        exit_ip = probe_proxy_exit_ip(proxy_url, username, password)
         return {'checked_at': int(time.time()), 'latency_ms': latency_ms, 'exit_ip': exit_ip}
     finally:
         if process:
@@ -3370,20 +3447,9 @@ def test_node(form):
                 raise RuntimeError('VLESS 测试通道启动超时')
             username = password = ''
             proxy_url = 'socks5h://127.0.0.1:%s' % local_port
-        exit_ip = proxy_curl(proxy_url, username, password, 'https://api.ipify.org')
-        if not re.fullmatch(r'\d{1,3}(?:\.\d{1,3}){3}', exit_ip):
-            raise RuntimeError('未获取到有效出口 IP')
-        started = time.monotonic()
-        speed_value = proxy_curl(proxy_url, username, password, 'https://speed.cloudflare.com/__down?bytes=3000000', metric='speed')
-        elapsed = int((time.monotonic() - started) * 1000)
-        speed_mbps = round(float(speed_value) * 8 / 1000000, 2)
-        reputation = subprocess.run(['curl', '-sS', '--max-time', '8', 'http://ip-api.com/json/%s?fields=status,country,isp,org,proxy,hosting,mobile' % exit_ip], capture_output=True, text=True, timeout=12)
-        profile = json.loads(reputation.stdout) if reputation.returncode == 0 else {}
-        signals = [name for name in ('proxy', 'hosting') if profile.get(name)]
-        purity = '较高' if not signals else ('一般' if len(signals) == 1 else '较低')
-        result = {'checked_at': int(time.time()), 'latency_ms': connect_ms, 'speed_mbps': speed_mbps, 'exit_ip': exit_ip,
-                  'country': translate_country(profile.get('country', '未知')), 'isp': profile.get('isp', '')[:100],
-                  'purity': purity, 'signals': signals, 'elapsed_ms': elapsed}
+        exit_ip = probe_proxy_exit_ip(proxy_url, username, password)
+        result = {'checked_at': int(time.time()), 'latency_ms': connect_ms, 'exit_ip': exit_ip,
+                  **probe_optional_metrics(proxy_url, username, password, exit_ip)}
     except Exception as exc:
         result = {'checked_at': int(time.time()), 'error': str(exc)[:300]}
     finally:

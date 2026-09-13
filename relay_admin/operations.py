@@ -74,7 +74,7 @@ def create_backup(configs, state_file, app_dir):
                 for path in sorted(set(paths)):
                     if os.path.exists(path):
                         archive.add(path, arcname=path.lstrip('/'), filter=clean)
-            with open(temporary, 'rb') as f:
+            with open(temporary, 'rb+') as f:
                 os.fsync(f.fileno())
             os.replace(temporary, os.path.join(BACKUPS, name))
             # Only rotate backups created by this feature; preserve pre-upgrade archives.

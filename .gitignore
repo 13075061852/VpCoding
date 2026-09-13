@@ -14,3 +14,10 @@ relay-admin-credentials.txt
 *.zip
 node_modules/
 .DS_Store
+*.before-*
+*.new
+*.bak
+.venv/
+.pytest_cache/
+coverage.xml
+.coverage

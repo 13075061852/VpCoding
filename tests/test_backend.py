@@ -44,7 +44,8 @@ class BackendTests(unittest.TestCase):
                 import tarfile
                 with tarfile.open(p/'backups'/operations.backups()[0]['name']) as tar:
                     self.assertTrue(any(n.endswith('source/app.py') for n in tar.getnames()))
-                self.assertEqual((p/'backups'/operations.backups()[0]['name']).stat().st_mode & 0o777,0o600)
+                if os.name == 'posix':
+                    self.assertEqual((p/'backups'/operations.backups()[0]['name']).stat().st_mode & 0o777,0o600)
 
     def test_audit_allowlist(self):
         with tempfile.TemporaryDirectory() as directory,patch.object(operations,'AUDIT',directory+'/audit.jsonl'):
@@ -62,7 +63,11 @@ class BackendTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 app.parse_forward_quota({'quota_total_gb':value,'quota_expires_on':'2030-01-01'})
 
-    def test_html_renders(self):
+    @patch.object(app, 'CONFIGS', {})
+    @patch.object(app, 'load_state', return_value={'feeds': {}, 'forward_meta': {}, 'node_meta': {}})
+    @patch.object(app, 'host_snapshot', return_value=dict.fromkeys(
+        ('hostname', 'uptime_text', 'load1', 'public_ip', 'os_name', 'cpu_text', 'memory_text', 'disk_text', 'kernel'), 'test') | {'services': {}, 'disk_used_percent': None})
+    def test_html_renders(self, *_):
         body=app.dashboard('test-csrf')
         self.assertIn('中转控制台',body);self.assertIn('console-stats',body)
         self.assertNotIn('CONSOLE_EXTENSION',app.APP_JS)

@@ -1,5 +1,21 @@
 # Relay Control
 
+## Reliability changes in 1.1.1
+
+- Proxy availability checks try independent HTTPS IP services with bounded timeouts. Both adding and testing nodes use the same fallback logic. A speed-test or IP-information provider failure no longer marks a working proxy offline; unavailable reputation data stays unknown.
+- No previous server IP or fixed local country is used as a default. The installer configures `PUBLIC_HOST`; manual service configurations must supply it explicitly.
+- Minimal-server installation installs curl and CA certificates before public-IP discovery, tries multiple discovery providers, waits for the Xray port, and saves initial credentials with mode 0600 before final service verification. If installation stops after creating configuration, inspect the reported error and retained credentials; do not blindly delete configuration and rerun.
+- Updates check Python imports before replacement and restore application files after replacement, restart, health-check, or quick-self-test failure. Concurrent updates are rejected. Application rollback does not undo Xray configuration repairs performed by the running panel.
+- Traffic sampling tracks the systemd service invocation, discards samples spanning a restart, and collects counters before normal configuration commits. Unexpected crashes can still lose traffic since the last poll; this is not exact billing-grade accounting.
+- CI runs backend regression tests and isolated update rollback scenarios. These do not replace the installer's real REALITY handshake and traffic-counter self-test on a new Linux host.
+
+Run the regression suite without production configuration:
+
+```bash
+python3 -m pip install qrcode
+PYTHONPATH=relay_admin python3 -m unittest discover -s tests -v
+```
+
 Relay Control is a self-hosted management panel for an Xray relay. This repository contains **application code and a zero-to-one installer only**. It deliberately contains no server IPs, accounts, passwords, certificates, subscription tokens, forwarding records, or existing Xray configuration.
 
 ## Fresh-server install

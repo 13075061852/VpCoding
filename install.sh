@@ -15,7 +15,7 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 
-RELAY_VERSION="1.1.0"
+RELAY_VERSION="1.1.1"
 XRAY_VERSION="${XRAY_VERSION:-26.3.27}"
 RELAY_REPO="${RELAY_REPO:-}"
 PUBLIC_HOST="${PUBLIC_HOST:-}"
@@ -68,10 +68,6 @@ if [[ -n "$REALITY_DEST" ]]; then
   [[ "$REALITY_DEST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*:[0-9]{1,5}$ ]] || { echo 'Provide --dest as host:port (for example www.apple.com:443).' >&2; exit 1; }
 fi
 
-if [[ -z "$PUBLIC_HOST" ]]; then
-  PUBLIC_HOST="$(curl -4fsS --connect-timeout 5 --max-time 10 https://api.ipify.org || true)"
-fi
-[[ "$PUBLIC_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$ ]] || { echo 'Provide a valid public IP or hostname with --host.' >&2; exit 1; }
 
 if [[ -e /etc/node-admin/admin.json || -e /etc/xray-att-relay/config.json || -e /etc/systemd/system/node-admin.service ]]; then
   echo 'An existing Relay/Xray installation was found; refusing to overwrite it.' >&2
@@ -85,7 +81,20 @@ case "$OS_ID" in debian|ubuntu) ;; *) echo 'Only Debian/Ubuntu are supported by 
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
-apt-get install -y --no-install-recommends ca-certificates curl unzip openssl git python3 python3-qrcode
+apt-get install -y --no-install-recommends ca-certificates curl unzip openssl git python3 python3-qrcode util-linux
+
+# Discover only after curl and the CA store exist on a minimal server.
+if [[ -z "$PUBLIC_HOST" ]]; then
+  for endpoint in https://api.ip.sb/ip https://api.ipify.org https://checkip.amazonaws.com; do
+    candidate="$(curl -4fsS --connect-timeout 5 --max-time 7 "$endpoint" || true)"
+    if python3 -c 'import ipaddress,sys; a=ipaddress.ip_address(sys.argv[1]); sys.exit(not (a.version == 4 and a.is_global))' "$candidate" 2>/dev/null; then
+      PUBLIC_HOST="$candidate"
+      break
+    fi
+  done
+fi
+[[ "$PUBLIC_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$ ]] || { echo 'Provide a valid public IP or hostname with --host.' >&2; exit 1; }
+
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_DIR="$SCRIPT_DIR"
@@ -200,6 +209,19 @@ PY
 admin_user="$(sed -n '1p' <<<"$credentials")"
 admin_password="$(sed -n '2p' <<<"$credentials")"
 
+# Preserve credentials even if a later service or end-to-end check fails.
+install -m 0600 /dev/null /root/relay-admin-credentials.txt
+cat > /root/relay-admin-credentials.txt <<EOF
+Relay Control initial credentials — store offline, then delete this file.
+URL: https://${PUBLIC_HOST}:${PANEL_PORT}
+Username: ${admin_user}
+Password: ${admin_password}
+Xray entry port: ${ENTRY_PORT}
+REALITY destination: ${REALITY_DEST}
+Installed version: ${RELAY_VERSION}
+EOF
+chmod 0600 /root/relay-admin-credentials.txt
+
 for file in app.py operations.py console.css console.js delete-dialog.js login.js; do
   install -m 0640 "$SOURCE_DIR/relay_admin/$file" "/opt/node-admin/$file"
 done
@@ -263,6 +285,10 @@ if ! systemctl is-active --quiet xray-att-relay; then
   echo 'xray-att-relay failed to start.' >&2
   exit 1
 fi
+for _ in {1..30}; do
+  if (exec 3<>"/dev/tcp/127.0.0.1/${ENTRY_PORT}") 2>/dev/null; then break; fi
+  sleep 1
+done
 if ! (exec 3<>"/dev/tcp/127.0.0.1/${ENTRY_PORT}") 2>/dev/null; then
   journalctl -u xray-att-relay -n 50 --no-pager >&2 || true
   echo "xray-att-relay is active but TCP ${ENTRY_PORT} is not listening." >&2
@@ -280,16 +306,7 @@ systemctl is-active --quiet node-admin || { echo 'node-admin is not active.' >&2
 echo 'Running end-to-end self-test...'
 bash "$SOURCE_DIR/selftest.sh"
 
-cat > /root/relay-admin-credentials.txt <<EOF
-Relay Control initial credentials — store offline, then delete this file.
-URL: https://${PUBLIC_HOST}:${PANEL_PORT}
-Username: ${admin_user}
-Password: ${admin_password}
-Xray entry port: ${ENTRY_PORT}
-REALITY destination: ${REALITY_DEST}
-Installed version: ${RELAY_VERSION}
-EOF
-chmod 0600 /root/relay-admin-credentials.txt
+
 cat <<EOF
 
 Installed and verified successfully.
